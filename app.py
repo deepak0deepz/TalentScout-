@@ -153,7 +153,7 @@ def display_chat_history():
             """, unsafe_allow_html=True)
 
 def get_fixed_questions(tech_stack):
-    """Get 5 fixed questions - same for every iteration"""
+    """Get 5 fixed questions! - same for every iteration"""
  
     fixed_questions = [
         {
@@ -585,3 +585,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

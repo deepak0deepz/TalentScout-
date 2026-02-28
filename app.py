@@ -109,6 +109,8 @@ def init_session_state():
         st.session_state.questions_queue = []
     if 'current_question_num' not in st.session_state:
         st.session_state.current_question_num = 0
+    if 'user_answers' not in st.session_state:
+        st.session_state.user_answers = []
 
 EXIT_KEYWORDS = ['exit', 'quit', 'bye', 'goodbye', 'stop', 'end']
 
@@ -152,74 +154,83 @@ def display_chat_history():
             </div>
             """, unsafe_allow_html=True)
 
+def generate_ai_questions(tech_stack):
+    """Generate technical questions using OpenAI API based on the candidate's tech stack"""
+    try:
+        tech_list = ', '.join(tech_stack) if tech_stack else "software development"
+        
+        # Generate 3 questions per technology
+        num_questions = len(tech_stack) * 3 if tech_stack else 3
+        
+        prompt = f"""Generate {num_questions} technical interview questions for a candidate with the following tech stack: {tech_list}.
+
+For each question, provide:
+1. A challenging, real-world scenario-based question related to the tech stack
+2. Which technology this question is for
+
+Make the questions progressively more difficult and cover different aspects like:
+- Architecture and design patterns
+- Performance optimization
+- Security best practices
+- Debugging and troubleshooting
+- Advanced concepts and edge cases
+
+Return the output as a JSON array with this exact format:
+[
+  {{
+    "question": "Your question here",
+    "technology": "technology name"
+  }},
+  ...
+]
+
+Generate now:"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are an expert technical interviewer. Generate complex, real-world scenario-based technical questions with proper JSON format."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        content = response.choices[0].message.content
+        
+        # Try to parse the JSON response
+        try:
+            import re
+            json_match = re.search(r'\[.*\]', content, re.DOTALL)
+            if json_match:
+                questions = json.loads(json_match.group())
+                return questions
+            else:
+                return get_fixed_questions(tech_stack)
+        except json.JSONDecodeError:
+            return get_fixed_questions(tech_stack)
+            
+    except Exception as e:
+        st.error(f"Failed to generate AI questions: {str(e)}")
+        return get_fixed_questions(tech_stack)
+
+
 def get_fixed_questions(tech_stack):
-    """Get 5 fixed questions! - same for every iteration"""
- 
-    fixed_questions = [
-        {
-            'question_template': 'What is the primary purpose of {tech} in software development?',
-            'options': {
-                'A': 'To increase system complexity',
-                'B': 'To improve application performance and scalability',
-                'C': 'To reduce code readability',
-                'D': 'To eliminate the need for testing'
-            },
-            'correct': 'B'
-        },
-        {
-            'question_template': 'Which of the following is a best practice when working with {tech}?',
-            'options': {
-                'A': 'Ignore error handling',
-                'B': 'Follow documentation and community guidelines',
-                'C': 'Avoid version control',
-                'D': 'Hardcode all configurations'
-            },
-            'correct': 'B'
-        },
-        {
-            'question_template': 'How does {tech} typically handle security concerns?',
-            'options': {
-                'A': 'By ignoring security completely',
-                'B': 'Through built-in security features and best practices',
-                'C': 'By exposing all data publicly',
-                'D': 'By disabling authentication'
-            },
-            'correct': 'B'
-        },
-        {
-            'question_template': 'What is a common challenge when scaling applications with {tech}?',
-            'options': {
-                'A': 'It cannot be scaled',
-                'B': 'Managing resources and optimizing performance',
-                'C': 'It requires no configuration',
-                'D': 'It works the same at any scale'
-            },
-            'correct': 'B'
-        },
-        {
-            'question_template': 'Which approach is recommended for debugging issues in {tech}?',
-            'options': {
-                'A': 'Add random print statements',
-                'B': 'Use proper logging and debugging tools',
-                'C': 'Restart the server repeatedly',
-                'D': 'Ignore errors in production'
-            },
-            'correct': 'B'
-        }
-    ]
-    
-    
-    primary_tech = tech_stack[0] if tech_stack else "Technology"
-    
+    """Get fixed questions - fallback"""
     questions = []
-    for i, template in enumerate(fixed_questions):
+    for tech in tech_stack:
         questions.append({
-            'question': template['question_template'].format(tech=primary_tech),
-            'options': template['options'],
-            'correct': template['correct'],
-            'technology': primary_tech
+            'question': f'What is the primary purpose of {tech} in software development?',
+            'technology': tech
         })
-    
+        questions.append({
+            'question': f'What are the best practices when working with {tech}?',
+            'technology': tech
+        })
+        questions.append({
+            'question': f'How does {tech} handle security concerns?',
+            'technology': tech
+        })
     return questions
 
 
@@ -235,7 +246,7 @@ I'm here to help you through the initial screening process for technical positio
 **What I'll do:**
 - Collect your basic information
 - Ask about your technical skills
-- Ask 5 technical questions
+- Ask technical questions on all your tech stack
 
 **To exit anytime, type:** exit, quit, or bye
 
@@ -264,7 +275,7 @@ Let's get started!
 
 **Your Tech Stack:**""",
         
-        'GENERATE_QUESTIONS': "Here are your 5 technical questions...",
+        'GENERATE_QUESTIONS': "Here are your technical questions...",
         
         'END': "Thank you for your time! Our recruitment team will review your profile and contact you shortly."
     }
@@ -356,40 +367,63 @@ def process_user_input(user_input):
         
         st.session_state.candidate_info['tech_stack'] = tech_stack
         st.session_state.tech_stack_list = tech_stack
-        st.session_state.questions_queue = get_fixed_questions(tech_stack)
+        
+        # Generate questions for ALL technologies
+        st.session_state.questions_queue = generate_ai_questions(tech_stack)
         st.session_state.current_question_num = 0
+        st.session_state.user_answers = []
         
         st.session_state.conversation_state = 'GENERATE_QUESTIONS'
-        add_to_history('bot', f"Great! I've recorded your tech stack: {', '.join(tech_stack)}")
+        tech_msg = f"Great! I've recorded your tech stack: {', '.join(tech_stack)}\n\nI'll ask you {len(st.session_state.questions_queue)} questions (3 for each technology). Please answer each question."
+        add_to_history('bot', tech_msg)
+        
         if st.session_state.questions_queue:
             q = st.session_state.questions_queue[0]
             st.session_state.current_question = q
-            question_msg = f"**Question 1 of 5:**\n\n{q['question']}"
+            question_msg = f"**Question 1 of {len(st.session_state.questions_queue)}** (Technology: {q['technology']}):\n\n{q['question']}"
             add_to_history('bot', question_msg)
         
     elif state == 'GENERATE_QUESTIONS':
-        valid_options = ['A', 'B', 'C', 'D']
-        user_answer = user_input.upper().strip()
-        
-        if user_answer not in valid_options:
-            add_to_history('bot', "Please select a valid option: A, B, C, or D.")
-            return
-        st.session_state.current_question_num += 1
-
-        if st.session_state.current_question_num >= 5:
+        # Check if user typed "done"
+        if user_input.lower().strip() == 'done':
             st.session_state.conversation_state = 'END'
             name = st.session_state.candidate_info.get('full_name', 'there')
             email = st.session_state.candidate_info.get('email', 'your email')
-            farewell = f"🎉 Thank you for your time, {name}! \n\nThanks for answering all 5 questions. We will let you know the result through your mail at {email}.\n\n🍀 Good luck with your application!"
+            farewell = f"🎉 Thank you for your time, {name}! \n\nWe have recorded your answers. We will let you know the result through your mail at {email}.\n\n🍀 Good luck with your application!"
             add_to_history('bot', farewell)
             st.session_state.conversation_ended = True
             save_candidate_info()
-        else:
-            q = st.session_state.questions_queue[st.session_state.current_question_num]
-            st.session_state.current_question = q
-            question_num = st.session_state.current_question_num + 1
-            question_msg = f"**Question {question_num} of 5:**\n\n{q['question']}"
-            add_to_history('bot', question_msg)
+            return
+        
+        # Store the answer for the current question
+        st.session_state.user_answers.append({
+            'question': st.session_state.current_question.get('question', ''),
+            'answer': user_input,
+            'technology': st.session_state.current_question.get('technology', '')
+        })
+        
+        st.session_state.current_question_num += 1
+        
+        # Check if we've asked all questions
+        total_questions = len(st.session_state.questions_queue)
+        
+        if st.session_state.current_question_num >= total_questions:
+            # All questions answered, end automatically
+            st.session_state.conversation_state = 'END'
+            name = st.session_state.candidate_info.get('full_name', 'there')
+            email = st.session_state.candidate_info.get('email', 'your email')
+            farewell = f"🎉 Thank you for your time, {name}! \n\nWe have recorded your answers. We will let you know the result through your mail at {email}.\n\n🍀 Good luck with your application!"
+            add_to_history('bot', farewell)
+            st.session_state.conversation_ended = True
+            save_candidate_info()
+            return
+        
+        # Ask next question
+        q = st.session_state.questions_queue[st.session_state.current_question_num]
+        st.session_state.current_question = q
+        question_num = st.session_state.current_question_num + 1
+        question_msg = f"**Question {question_num} of {total_questions}** (Technology: {q['technology']}):\n\n{q['question']}"
+        add_to_history('bot', question_msg)
     
     else:
         add_to_history('bot', "I'm here to assist with the hiring process. Could you please provide the requested details?")
@@ -403,6 +437,7 @@ def save_candidate_info():
             'candidate_info': st.session_state.candidate_info,
             'conversation_history': st.session_state.conversation_history,
             'generated_questions': st.session_state.generated_questions,
+            'user_answers': st.session_state.get('user_answers', []),
             'timestamp': datetime.now().isoformat()
         }
         
@@ -442,12 +477,6 @@ def reset_conversation():
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     init_session_state()
-    st.rerun()
-
-def process_answer(answer):
-    """Process MCQ answer from button click"""
-    add_to_history('user', answer)
-    process_user_input(answer)
     st.rerun()
 
 def main():
@@ -515,62 +544,38 @@ def main():
                     <strong>🤖 TalentScout:</strong> {initial_msg}
                 </div>
                 """, unsafe_allow_html=True)
-            
-           
-            if st.session_state.conversation_state == 'GENERATE_QUESTIONS' and st.session_state.current_question:
-                q = st.session_state.current_question
-                st.markdown(f"""
-                <div class="chat-message bot-message" style="margin-top: 0.5rem;">
-                    <strong>Options:</strong><br>
-                    <span style="font-size: 1.1rem;">
-                    <b>A)</b> {q['options']['A']}<br>
-                    <b>B)</b> {q['options']['B']}<br>
-                    <b>C)</b> {q['options']['C']}<br>
-                    <b>D)</b> {q['options']['D']}
-                    </span>
-                </div>
-                """, unsafe_allow_html=True)
     
-   
     if not st.session_state.conversation_ended:
         st.markdown("---")
         
-       
-        if st.session_state.conversation_state == 'GENERATE_QUESTIONS':
-           
-            st.markdown("**Select your answer:**")
-            cols = st.columns(4)
-            with cols[0]:
-                if st.button("A", use_container_width=True, key="btn_A"):
-                    process_answer("A")
-            with cols[1]:
-                if st.button("B", use_container_width=True, key="btn_B"):
-                    process_answer("B")
-            with cols[2]:
-                if st.button("C", use_container_width=True, key="btn_C"):
-                    process_answer("C")
-            with cols[3]:
-                if st.button("D", use_container_width=True, key="btn_D"):
-                    process_answer("D")
-        else:
-           
-            with st.form(key='chat_form', clear_on_submit=True):
+        # Always use text input for all states including questions
+        with st.form(key='chat_form', clear_on_submit=True):
+            if st.session_state.conversation_state == 'GENERATE_QUESTIONS':
+                total_q = len(st.session_state.questions_queue)
+                answered = st.session_state.current_question_num
+                user_input = st.text_input(
+                    f"Your answer ({answered + 1}/{total_q}):",
+                    placeholder="Type your answer here...",
+                    key="user_input",
+                    label_visibility="collapsed"
+                )
+            else:
                 user_input = st.text_input(
                     "Your response:",
                     placeholder="Type your answer here...",
                     key="user_input",
                     label_visibility="collapsed"
                 )
-                submit_button = st.form_submit_button("Send ➤", use_container_width=True)
+            submit_button = st.form_submit_button("Send ➤", use_container_width=True)
             
             if submit_button and user_input:
                
                 add_to_history('user', user_input)
-                
+               
                
                 process_user_input(user_input)
-                
-                
+               
+               
                 st.rerun()
 
     else:
@@ -585,4 +590,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
